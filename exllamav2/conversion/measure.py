@@ -10,6 +10,7 @@ from exllamav2.model import \
     ExLlamaV2LayerNorm,
     ExLlamaV2ParallelDecoder
 )
+from exllamav2.gated_delta_net import ExLlamaV2GatedDeltaNet
 
 from safetensors import safe_open
 from safetensors.torch import save_file
@@ -524,6 +525,9 @@ def measure_quant(job, save_fn, model, hidden_state_offload_layers):
         elif isinstance(module, ExLlamaV2PosEmbedding):
             mode = "pos_emb"
 
+        elif isinstance(module, ExLlamaV2GatedDeltaNet):
+            mode = "gdn"
+
         # Reference forward pass
 
         cache = None
@@ -607,6 +611,9 @@ def measure_quant(job, save_fn, model, hidden_state_offload_layers):
             if mode == "pos_emb":
                 target_states.append(outputs["hidden_states"].to(target_device))
 
+            if mode == "gdn":
+                target_states.append(outputs["hidden_states"].to(target_device))
+
         # For MoE layers, warn if any layer received less than 10% of a calibration batch
 
         if mode == "block_sparse_moe":
@@ -632,6 +639,9 @@ def measure_quant(job, save_fn, model, hidden_state_offload_layers):
             m = measure_parallel_decoder(module, hidden_states, target_states_attn, target_states_mlp, quantizers, cache, attn_params)
             target_states_attn = None
             target_states_mlp = None
+
+        if mode == "gdn":
+            m = [{"accuracy": 1.0, "total_bits": module.numel() * 16}]
 
         quantizers = None
 

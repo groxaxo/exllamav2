@@ -302,6 +302,22 @@ class ExLlamaV2GatedDeltaNet(ExLlamaV2Module):
         self.conv1d_weight = None
         self.conv1d_bias = None
 
+    def get_weight_dict(self) -> dict:
+        """Return all GDN weights as a flat dict keyed by safetensors-style keys."""
+        d = {}
+        d[self.key + ".in_proj_qkv.weight"] = self.qkv_proj_weight
+        d[self.key + ".in_proj_z.weight"] = self.z_proj_weight
+        d[self.key + ".in_proj_b.weight"] = self.b_proj_weight
+        d[self.key + ".in_proj_a.weight"] = self.a_proj_weight
+        d[self.key + ".out_proj.weight"] = self.o_proj_weight
+        d[self.key + ".norm.weight"] = self.gdn_norm_weight
+        d[self.key + ".conv1d.weight"] = self.conv1d_weight
+        if self.conv1d_bias is not None:
+            d[self.key + ".conv1d.bias"] = self.conv1d_bias
+        d[self.key + ".A_log"] = self.a_log
+        d[self.key + ".dt_bias"] = self.dt_bias
+        return d
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -413,8 +429,8 @@ class ExLlamaV2GatedDeltaNet(ExLlamaV2Module):
         # 6. Output projection
         output = F.linear(core_out.to(torch.bfloat16), self.o_proj_weight.to(torch.bfloat16))
 
-        # 7. Residual connection
-        hidden_states = output + residual
+        # 7. Residual connection (cast back to input dtype for compatibility with quantized modules)
+        hidden_states = (output + residual).to(residual.dtype)
 
         # 8. Update state
         rs.last_recurrent_state = recurrent_state

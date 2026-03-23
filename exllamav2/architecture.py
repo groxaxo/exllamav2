@@ -105,9 +105,10 @@ internlm2_keymap = [("$output.", "lm_head."),
 google_keymap = [("mm_input_projection_weight", "mm_input_projection.weight")]
 
 # Qwen 3.5 / Qwen3Next: remap tensor keys so that
-# "model.language_model.<rest>" becomes "model.language_model.model.<rest>"
-# to match the hardcoded "model." prefix used by model.py layer construction.
-qwen35_keymap = [("$model.language_model.", "model.language_model.model.")]
+# "model.language_model.<rest>" in safetensors becomes "model.<rest>" internally.
+# Using lm_prefix="" avoids the double-mapping issue when loading EXL2 output files,
+# since the EXL2 keys ("model.layers.0...") don't start with "model.language_model.".
+qwen35_keymap = [("$model.language_model.", "model.")]
 
 # GDN (linear_attention) layer keys – each row provides alternatives so that the
 # key validation passes for *either* GDN layers or standard attention layers.
@@ -953,7 +954,7 @@ class ExLlamaV2ArchParams:
 
         if _is_qwen35_style_architecture(arch_string, read_config):
             arch_recognized = True
-            self.lm_prefix = "model.language_model."
+            self.lm_prefix = ""
             self.keymap = qwen35_keymap
             self.lm.layer_keys += \
                 layer_keys_llama_norms + \

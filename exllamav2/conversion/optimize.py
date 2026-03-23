@@ -28,12 +28,19 @@ def optimize(job, save_fn, model):
     while not model.modules[first_q_layer].key.startswith(cfg.arch.lm_prefix + "model.layers"):
         first_q_layer += 1
 
-    # max_step_size = 2
-    # first_layer_bias = 4
-    # bias_layers = 2
-    # bias_iter = 0
+    # Detect hybrid architectures with GDN layers
+    has_gdn_layers = hasattr(cfg, 'layer_types') and cfg.layer_types and \
+        any(lt == "linear_attention" for lt in cfg.layer_types)
 
-    key = cfg.arch.lm_prefix + "model.layers.0"
+    # Find the first attention layer for shape reference (may not be layer 0 in hybrid models)
+    first_attn_layer_idx = 0
+    if has_gdn_layers:
+        for li in range(cfg.num_hidden_layers):
+            if cfg.layer_types[li] != "linear_attention":
+                first_attn_layer_idx = li
+                break
+
+    key = cfg.arch.lm_prefix + "model.layers." + str(first_attn_layer_idx)
     key_q = key + km["attn_q"]
     key_k = key + km["attn_k"]
     key_v = key + km["attn_v"]
@@ -84,9 +91,13 @@ def optimize(job, save_fn, model):
     params = []
 
     for i in range(num_layers):
+        is_gdn = has_gdn_layers and i < len(cfg.layer_types) and cfg.layer_types[i] == "linear_attention"
         if cfg.arch.lm.parallel_decoder_blocks:
             m1 = measurement[cfg.arch.lm_prefix + "model.layers." + str(i) + ".parallel_decoder"]["attn"]
             m2 = measurement[cfg.arch.lm_prefix + "model.layers." + str(i) + ".parallel_decoder"]["mlp"]
+        elif is_gdn:
+            m1 = measurement[cfg.arch.lm_prefix + "model.layers." + str(i) + ".linear_attn.gdn"]
+            m2 = measurement[cfg.arch.lm_prefix + "model.layers." + str(i) + "." + mlp_mode]
         else:
             m1 = measurement[cfg.arch.lm_prefix + "model.layers." + str(i) + ".self_attn"]
             m2 = measurement[cfg.arch.lm_prefix + "model.layers." + str(i) + "." + mlp_mode]
@@ -170,17 +181,23 @@ def optimize(job, save_fn, model):
     job["strategy"] = {}
     for layer_ in range(num_layers):
 
-        k1 = cfg.arch.lm_prefix + "model.layers." + str(layer_) + ".self_attn"
+        is_gdn = has_gdn_layers and layer_ < len(cfg.layer_types) and cfg.layer_types[layer_] == "linear_attention"
+        if is_gdn:
+            k1 = cfg.arch.lm_prefix + "model.layers." + str(layer_) + ".linear_attn.gdn"
+        else:
+            k1 = cfg.arch.lm_prefix + "model.layers." + str(layer_) + ".self_attn"
         k2 = cfg.arch.lm_prefix + "model.layers." + str(layer_) + "." + mlp_mode
         p1 = params[layer_ * 2][solution_idx[layer_ * 2]]
         p2 = params[layer_ * 2 + 1][solution_idx[layer_ * 2 + 1]]
 
-        for (k, p, n) in zip((k1, k2), (p1, p2), (numel_attn, numel_mlp)):
+        n1 = p1["total_bits"] if is_gdn else numel_attn
+        for (k, p, n) in zip((k1, k2), (p1, p2), (n1, numel_mlp)):
             job["strategy"][k] = p
-            bpw = p["total_bits"] / n
+            bpw = p["total_bits"] / n if n > 0 else 0
             err = 1 - p["accuracy"]
             print(f" --   {k:50} {bpw:1.4f} bpw - exp. error: {err:1.8f}")
-            logerr += math.log(err)
+            if err > 0:
+                logerr += math.log(err)
             maxerr = max(err, maxerr)
 
     print(f" -- sum(log(err)): {logerr:.6f}")

@@ -1066,7 +1066,7 @@ class ExLlamaV2Attention(ExLlamaV2Module):
                     **kwargs,
                 )
 
-        if self.q_handle is None or intermediates:
+        if self.q_handle is None or intermediates or self.attn_output_gate:
             return self.forward_torch(
                 hidden_states,
                 cache,

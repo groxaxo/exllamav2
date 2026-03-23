@@ -10,6 +10,7 @@ from exllamav2.model import \
     ExLlamaV2RMSNorm,
     ExLlamaV2LayerNorm
 )
+from exllamav2.gated_delta_net import ExLlamaV2GatedDeltaNet
 
 from safetensors import safe_open
 from safetensors.torch import save_file
@@ -334,6 +335,9 @@ def quant(job, save_fn, model):
 
         elif isinstance(module, ExLlamaV2PosEmbedding):
             mode = "pos_emb"
+
+        elif isinstance(module, ExLlamaV2GatedDeltaNet):
+            mode = "gdn"
 
         elif isinstance(module, ExLlamaV2ParallelDecoder):
             mode = "parallel_decoder"

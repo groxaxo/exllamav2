@@ -2,6 +2,9 @@
 
 **This project is archived for now**. Development continues on [ExLlamaV3](https://github.com/turboderp-org/exllamav3).
 
+Qwen 3.5 models are not supported by ExLlamaV2. They use newer hybrid linear-attention / GatedDeltaNet
+blocks that require the ExLlamaV3 generation stack.
+
 # ExLlamaV2
 
 ExLlamaV2 is an inference library for running local LLMs on modern consumer GPUs.

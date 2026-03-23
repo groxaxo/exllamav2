@@ -10,6 +10,7 @@ from exllamav2.model import \
     ExLlamaV2RMSNorm,
     ExLlamaV2LayerNorm
 )
+from exllamav2.gated_delta_net import ExLlamaV2GatedDeltaNet
 
 from exllamav2.version import __version__
 
@@ -143,6 +144,16 @@ def compile_model(job, save_fn, model):
             if isinstance(module, ExLlamaV2RMSNorm) or isinstance(module, ExLlamaV2LayerNorm):
 
                 d = get_f_module(job, module); out_dict.update(d); current_size += _dsize(d)
+
+            if isinstance(module, ExLlamaV2GatedDeltaNet):
+
+                d = get_f_module(job, module.pre_layernorm)
+                if d: out_dict.update(d); current_size += _dsize(d)
+                module.load()
+                d = module.get_weight_dict()
+                d = {k: v.contiguous().half() for k, v in d.items()}
+                out_dict.update(d); current_size += _dsize(d)
+                module.unload()
 
             if isinstance(module, ExLlamaV2Linear):
 
