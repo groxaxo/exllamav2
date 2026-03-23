@@ -335,6 +335,12 @@ class ExLlamaV2DynamicGenerator:
         self.draft_model = draft_model
         self.draft_cache = draft_cache
 
+        if getattr(self.cache, "recurrent_layer_indices", None):
+            raise ValueError(
+                "DynamicGenerator does not support recurrent layers because it relies on paged/cache-copy "
+                "and rewind operations that are incompatible with single-state recurrent caching."
+            )
+
         if draft_model or use_ngram_draft:
             assert num_draft_tokens <= max_q_size, \
                 "num_draft_tokens cannot be larger than max_q_size."

@@ -215,6 +215,10 @@ class ExLlamaV2BaseGenerator:
 
         unhealed_token = None
         if ids.shape[-1] < 2: token_healing = False
+        if token_healing and getattr(self.cache, "recurrent_layer_indices", None):
+            raise ValueError(
+                "token_healing is not supported for recurrent layers because it rewinds the cache state."
+            )
         if token_healing:
             unhealed_token = ids[:, -1:]
             ids = ids[:, :-1]

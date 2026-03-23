@@ -89,6 +89,15 @@ class GDNRecurrentState:
         self.last_conv_state = None
         self.last_recurrent_state = None
 
+    def clone(self):
+        new = GDNRecurrentState()
+        new.position = self.position
+        new.last_conv_state = None if self.last_conv_state is None else self.last_conv_state.clone()
+        new.last_recurrent_state = (
+            None if self.last_recurrent_state is None else self.last_recurrent_state.clone()
+        )
+        return new
+
 
 # ---------------------------------------------------------------------------
 # Pure-torch recurrent gated delta rule
@@ -343,6 +352,12 @@ class ExLlamaV2GatedDeltaNet(ExLlamaV2Module):
                 recurrent_states[self.layer_idx] = rs
         else:
             rs = GDNRecurrentState()
+
+        if recurrent_states is not None and past_len is not None and rs.position != past_len:
+            raise RuntimeError(
+                f"Recurrent state for layer {self.layer_idx} is out of sync "
+                f"(state at {rs.position}, cache at {past_len})."
+            )
 
         device = x.device
 

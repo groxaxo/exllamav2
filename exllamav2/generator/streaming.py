@@ -360,7 +360,27 @@ class ExLlamaV2StreamingGenerator(ExLlamaV2BaseGenerator):
         assert input_embeddings is None or self.draft_model is None, \
             "Can not use input embeddings with draft model"
 
-        self._gen_begin_reuse(input_ids, gen_settings)
+        recurrent_cache = bool(getattr(self.cache, "recurrent_layer_indices", None))
+        if recurrent_cache:
+            if token_healing:
+                raise ValueError(
+                    "token_healing is not supported for recurrent layers because it rewinds the cache state."
+                )
+            if self.draft_model is not None:
+                raise ValueError(
+                    "draft-model speculative decoding is not supported for recurrent layers."
+                )
+            if self.speculative_ngram:
+                raise ValueError(
+                    "speculative_ngram is not supported for recurrent layers."
+                )
+            if banned_strings:
+                raise ValueError(
+                    "banned_strings is not supported for recurrent layers because it rewinds the cache state."
+                )
+            self._gen_begin(input_ids, gen_settings)
+        else:
+            self._gen_begin_reuse(input_ids, gen_settings)
         self.heal_next_token = (token_healing and self.sequence_ids.shape[-1] >= 2)
 
         # Remove indexed embeddings from generator's sequence
@@ -1038,5 +1058,4 @@ class ExLlamaV2StreamingGenerator(ExLlamaV2BaseGenerator):
 
         self.ngram_preloaded = NgramCache(self.speculative_ngram_min, self.speculative_ngram_max, None)
         self.ngram_preloaded.update(input_ids)
-
 

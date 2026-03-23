@@ -834,6 +834,9 @@ class ExLlamaV2:
         bsz, q_len = input_ids.shape
         remaining_q_len = q_len
 
+        if isinstance(cache, list) and any(getattr(c, "recurrent_layer_indices", None) for c in cache):
+            raise ValueError("List-of-caches forward is not supported for recurrent layers.")
+
         # Attn and MLP layers have preallocated buffers for temp states, sized by the model config. Effective max input
         # length depends on the current batch size
 
@@ -963,6 +966,10 @@ class ExLlamaV2:
         if cache is not None:
             past_len = cache.current_seq_len
 
+        if cache is not None and isinstance(attn_params, ExLlamaV2Attention.PagedParams) and \
+            getattr(cache, "recurrent_layer_indices", None):
+            raise ValueError("Paged cache/attention is not supported for recurrent layers.")
+
         assert self.config.max_output_len is None or \
             preprocess_only or \
             last_id_only or \
@@ -1022,7 +1029,20 @@ class ExLlamaV2:
             if n_device is not None and n_device != device and n_device >= 0:
                 x = safe_move_tensor(x, n_device, non_blocking = True)
 
-            x = module.forward(x, cache = cache, attn_params = attn_params, past_len = past_len, loras = loras, **kwargs)
+            module_kwargs = kwargs
+            if isinstance(module, ExLlamaV2GatedDeltaNet) and cache is not None and \
+                isinstance(cache, ExLlamaV2CacheBase):
+                module_kwargs = dict(kwargs)
+                module_kwargs["recurrent_states"] = cache.recurrent_states
+
+            x = module.forward(
+                x,
+                cache = cache,
+                attn_params = attn_params,
+                past_len = past_len,
+                loras = loras,
+                **module_kwargs
+            )
 
             if preprocess_only and idx == self.last_kv_layer_idx:
                 x = None

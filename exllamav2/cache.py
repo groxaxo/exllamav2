@@ -30,6 +30,9 @@ class ExLlamaV2CacheBase:
     weights_per_element_v: int
     has_scales: bool
     fixed_device: int | None
+    recurrent_layer_indices: list[int]
+    recurrent_states: dict[int, object]
+    supports_rewind: bool
 
 
     def __init__(
@@ -62,7 +65,14 @@ class ExLlamaV2CacheBase:
         self.num_hidden_layers = self.model.config.num_hidden_layers
         self.head_dim = self.model.config.head_dim
 
-        self.current_seq_len = 0
+        self.recurrent_layer_indices = [
+            idx
+            for idx, layer_type in enumerate(getattr(self.model.config, "layer_types", []) or [])
+            if layer_type == "linear_attention"
+        ]
+        self.recurrent_states = {}
+        self.supports_rewind = len(self.recurrent_layer_indices) == 0
+        self._current_seq_len = 0
         self.shape_basic = (self.batch_size, self.max_seq_len, self.num_key_value_heads, self.head_dim)
         self.shape_wk = (self.batch_size, self.max_seq_len, self.num_key_value_heads, self.head_dim // self.weights_per_element_k)
         self.shape_wv = (self.batch_size, self.max_seq_len, self.num_key_value_heads, self.head_dim // self.weights_per_element_v)
@@ -70,6 +80,61 @@ class ExLlamaV2CacheBase:
 
         self.q_block = 0
         self.fixed_device = fixed_device
+
+
+    @property
+    def current_seq_len(self) -> int:
+        return self._current_seq_len
+
+
+    @current_seq_len.setter
+    def current_seq_len(self, value: int):
+        value = int(value)
+        assert value >= 0, "current_seq_len cannot be negative"
+
+        if not self.recurrent_layer_indices:
+            self._current_seq_len = value
+            return
+
+        prev = getattr(self, "_current_seq_len", 0)
+        if value == 0:
+            self.clear_recurrent_states()
+        elif value < prev:
+            raise RuntimeError(
+                "Recurrent caches do not support rewinding/truncation. "
+                "Reset the cache instead, or avoid rewind-heavy features such as token healing, "
+                "banned-string rewinds, speculative decoding, prompt reuse, or paged generation."
+            )
+
+        self._current_seq_len = value
+
+
+    @staticmethod
+    def _clone_recurrent_state(state):
+        if hasattr(state, "clone"):
+            return state.clone()
+
+        clone = type(state)()
+        clone.position = state.position
+        clone.last_conv_state = None if state.last_conv_state is None else state.last_conv_state.clone()
+        clone.last_recurrent_state = (
+            None if state.last_recurrent_state is None else state.last_recurrent_state.clone()
+        )
+        return clone
+
+
+    def clear_recurrent_states(self):
+        self.recurrent_states = {}
+
+
+    def _copy_recurrent_states(self, copy_from: ExLlamaV2CacheBase | None):
+        self.clear_recurrent_states()
+        if copy_from is None:
+            return
+        self.recurrent_states = {
+            layer_idx: self._clone_recurrent_state(state)
+            for layer_idx, state in copy_from.recurrent_states.items()
+        }
 
 
     def create_state_tensors(
@@ -81,6 +146,7 @@ class ExLlamaV2CacheBase:
 
         if copy_from:
             self.current_seq_len = copy_from.current_seq_len
+        self._copy_recurrent_states(copy_from)
 
         if not lazy:
 
@@ -141,6 +207,8 @@ class ExLlamaV2CacheBase:
 
 
     def roll_left(self):
+        if self.recurrent_layer_indices and self.current_seq_len:
+            raise RuntimeError("roll_left is not supported for recurrent caches.")
 
         for i in range(self.model.config.num_hidden_layers):
 
@@ -189,6 +257,8 @@ class ExLlamaV2CacheBase:
         to_row: int,
         to_rows: int
     ):
+        if self.recurrent_layer_indices or target.recurrent_layer_indices:
+            raise RuntimeError("copy_states is not supported for recurrent caches.")
         assert from_rows == 1
         assert from_columns == to_columns
         assert to_column + to_columns <= target.max_seq_len
