@@ -159,6 +159,16 @@ class ExLlamaV2Config:
     vision_fullatt_block_indexes: list | None
     vision_window_size: int | None
 
+    # Qwen 3.5 / hybrid linear-attention fields
+
+    layer_types: list | None
+    attn_output_gate: bool
+    gdn_num_key_heads: int | None
+    gdn_key_head_dim: int | None
+    gdn_num_value_heads: int | None
+    gdn_value_head_dim: int | None
+    gdn_conv_kernel_dim: int | None
+
     # Deprecated fields, kept for compatibiltiy
 
     fasttensors: bool                           # Fasttensors loader removed in v0.2.3
@@ -411,6 +421,28 @@ class ExLlamaV2Config:
             if scaling_type == "mrope":
                 self.mrope_section = rs["mrope_section"]
 
+        # Qwen 3.5 / hybrid recurrent config
+
+        self.layer_types = read(read_config, list, "layer_types", None, opt_subkey="text_config")
+        self.attn_output_gate = read(read_config, bool, "attn_output_gate", False, opt_subkey="text_config")
+        self.gdn_num_key_heads = read(read_config, int, "linear_num_key_heads", None, opt_subkey="text_config")
+        self.gdn_key_head_dim = read(read_config, int, "linear_key_head_dim", None, opt_subkey="text_config")
+        self.gdn_num_value_heads = read(read_config, int, "linear_num_value_heads", None, opt_subkey="text_config")
+        self.gdn_value_head_dim = read(read_config, int, "linear_value_head_dim", None, opt_subkey="text_config")
+        self.gdn_conv_kernel_dim = read(read_config, int, "linear_conv_kernel_dim", None, opt_subkey="text_config")
+
+        # For Qwen 3.5, rope_parameters may override top-level rope_theta and partial_rotary_factor
+        rope_params = read(read_config, dict, "rope_parameters", None, opt_subkey="text_config")
+        if rope_params:
+            rp_theta = rope_params.get("rope_theta")
+            if rp_theta is not None:
+                self.rotary_embedding_base = float(rp_theta)
+            rp_partial = rope_params.get("partial_rotary_factor")
+            if rp_partial is not None:
+                self.partial_rotary_factor = float(rp_partial)
+            rp_mrope = rope_params.get("mrope_section")
+            if rp_mrope is not None:
+                self.mrope_section = rp_mrope
 
         # Checkpoint format (for GPTQ models)
 
@@ -492,6 +524,11 @@ class ExLlamaV2Config:
         # Vision models
 
         self.vision_model_type = read(read_config, str, "vision_config->model_type", None)
+
+        # For hybrid recurrent models (Qwen 3.5), skip vision model loading –
+        # we only support the text/language model path.
+        if self.layer_types and self.vision_model_type:
+            self.vision_model_type = None
 
         if self.vision_model_type:
             self.model_config = os.path.join(self.model_dir, "preprocessor_config.json")

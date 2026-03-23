@@ -155,6 +155,8 @@ class ExLlamaV2Attention(ExLlamaV2Module):
         self.q_handle = None
         self.temp_lora_size = 0
 
+        self.attn_output_gate = getattr(cfg, 'attn_output_gate', False) and not ap.is_vision
+
         if ap.is_vision:
             self.num_attention_heads = cfg.vision_num_attention_heads
             self.num_key_value_heads = cfg.vision_num_key_value_heads
@@ -183,12 +185,13 @@ class ExLlamaV2Attention(ExLlamaV2Module):
             self.has_norm = False
 
         f_a = 0
-        f_b = self.num_attention_heads * self.head_dim
+        q_features = self.num_attention_heads * self.head_dim * (2 if self.attn_output_gate else 1)
+        f_b = q_features
         f_c = f_b + self.num_key_value_heads * self.head_dim
         f_d = f_c + self.num_key_value_heads * self.head_dim
         f_key = (key + km["fused_qkv"]) if km["fused_qkv"] else None
 
-        self.q_proj = ExLlamaV2Linear(model, key + km["attn_q"], hidden_size, self.num_attention_heads * self.head_dim, ap.attention_bias_qkv, f_key = f_key, f_beg = f_a, f_end = f_b, altpack_qkv = ap.fused_qkv_altpack)
+        self.q_proj = ExLlamaV2Linear(model, key + km["attn_q"], hidden_size, q_features, ap.attention_bias_qkv, f_key = f_key, f_beg = f_a, f_end = f_b, altpack_qkv = ap.fused_qkv_altpack)
         self.k_proj = ExLlamaV2Linear(model, key + km["attn_k"], hidden_size, self.num_key_value_heads * self.head_dim, ap.attention_bias_qkv, f_key = f_key, f_beg = f_b, f_end = f_c, altpack_qkv = ap.fused_qkv_altpack)
         self.v_proj = ExLlamaV2Linear(model, key + km["attn_v"], hidden_size, self.num_key_value_heads * self.head_dim, ap.attention_bias_qkv, f_key = f_key, f_beg = f_c, f_end = f_d, altpack_qkv = ap.fused_qkv_altpack)
         self.o_proj = ExLlamaV2Linear(model, key + km["attn_o"], self.num_attention_heads * self.head_dim, hidden_size, ap.attention_bias_o, prescale = cfg.scale_depth)
@@ -1424,6 +1427,15 @@ class ExLlamaV2Attention(ExLlamaV2Module):
         key_states = self.k_proj.forward(post_norm, loras = loras)
         value_states = self.v_proj.forward(post_norm, loras = loras)
 
+        # Split output gate from Q projection if attn_output_gate is enabled
+        attn_gate = None
+        if self.attn_output_gate:
+            q_and_gate = query_states.view(batch_size, q_len, num_attention_heads, head_dim * 2)
+            query_states = q_and_gate[:, :, :, :head_dim].contiguous()
+            attn_gate = q_and_gate[:, :, :, head_dim:].contiguous()
+        else:
+            query_states = query_states
+
         # Shape for attention
 
         query_states = query_states.view(batch_size, q_len, num_attention_heads, head_dim)
@@ -1509,6 +1521,12 @@ class ExLlamaV2Attention(ExLlamaV2Module):
 
         if cache is not None:
             cache.store_kv_state(self.layer_idx, batch_size, past_len, q_len)
+
+        # Apply attention output gate
+        if attn_gate is not None:
+            attn_output = attn_output.view(batch_size, q_len, num_attention_heads, head_dim)
+            attn_output = attn_output * F.sigmoid(attn_gate)
+            attn_output = attn_output.reshape(batch_size, q_len, num_attention_heads * head_dim)
 
         # Output projection
 

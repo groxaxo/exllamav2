@@ -104,7 +104,35 @@ internlm2_keymap = [("$output.", "lm_head."),
                     (".wo.", ".o_proj.")]
 google_keymap = [("mm_input_projection_weight", "mm_input_projection.weight")]
 
+# Qwen 3.5 / Qwen3Next: remap tensor keys so that
+# "model.language_model.<rest>" becomes "model.language_model.model.<rest>"
+# to match the hardcoded "model." prefix used by model.py layer construction.
+qwen35_keymap = [("$model.language_model.", "model.language_model.model.")]
+
+# GDN (linear_attention) layer keys – each row provides alternatives so that the
+# key validation passes for *either* GDN layers or standard attention layers.
+layer_keys_qwen35_hybrid_attn = [
+    ["self_attn.q_proj", "linear_attn.in_proj_qkv"],
+    ["self_attn.k_proj", "linear_attn.in_proj_z"],
+    ["self_attn.v_proj", "linear_attn.in_proj_a"],
+    ["self_attn.o_proj", "linear_attn.out_proj"],
+]
+
 no_default = object()
+
+
+def _is_qwen35_style_architecture(arch_string: str, read_config: dict) -> bool:
+    if arch_string.startswith(("Qwen3_5", "Qwen3Next")):
+        return True
+
+    for section in (read_config, read_config.get("text_config"), read_config.get("vision_config")):
+        if not isinstance(section, dict):
+            continue
+        model_type = section.get("model_type")
+        if isinstance(model_type, str) and model_type.startswith(("qwen3_5", "qwen3_next")):
+            return True
+
+    return False
 
 class RopeStyle(IntEnum):
     NONE = 0
@@ -920,6 +948,25 @@ class ExLlamaV2ArchParams:
             self.lm.attention_bias_qkv = read_config.get("attention_bias", False)
 
         # Llama (default + fallback)
+
+        # Qwen 3.5 / Qwen3Next (hybrid linear-attention + full-attention)
+
+        if _is_qwen35_style_architecture(arch_string, read_config):
+            arch_recognized = True
+            self.lm_prefix = "model.language_model."
+            self.keymap = qwen35_keymap
+            self.lm.layer_keys += \
+                layer_keys_llama_norms + \
+                layer_keys_qwen35_hybrid_attn + \
+                layer_keys_llama_mlp
+            self.lm.expect_keys += \
+                expect_keys_llama
+            self.lm.eager_attn_only = True
+            self.lm.norm_constant_bias = 1
+            self.lm.keys.update({
+                "lm_head": "model.embed_tokens",
+            })
+            self.lm.default_use_qk_norm = True
 
         if arch_string != "LlamaForCausalLM" and not arch_recognized:
             print(f" !! Warning, unknown architecture: {arch_string}")

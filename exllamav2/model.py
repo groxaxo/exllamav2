@@ -41,6 +41,7 @@ from exllamav2.lora import ExLlamaV2Lora
 from exllamav2.mlp import ExLlamaV2MLP
 from exllamav2.moe_mlp import ExLlamaV2MoEMLP
 from exllamav2.parallel_decoder import ExLlamaV2ParallelDecoder
+from exllamav2.gated_delta_net import ExLlamaV2GatedDeltaNet
 from exllamav2.embedding import ExLlamaV2Embedding
 from exllamav2.pos_embedding import ExLlamaV2PosEmbedding
 from exllamav2.compat import safe_move_tensor
@@ -123,6 +124,11 @@ class ExLlamaV2:
             if cfg.arch.lm.parallel_decoder_blocks:
                 pd = ExLlamaV2ParallelDecoder(self, layer_key, layer_idx, sliding_window = swa, rope_index = rope_index)
                 self.modules += [pd]
+            elif cfg.layer_types and cfg.layer_types[layer_idx] == "linear_attention":
+                gdn = ExLlamaV2GatedDeltaNet(self, layer_key + ".linear_attn", layer_idx)
+                if cfg.arch.lm.is_moe: mlp = ExLlamaV2MoEMLP(self, layer_key, layer_idx)
+                else: mlp = ExLlamaV2MLP(self, layer_key, layer_idx)
+                self.modules += [gdn, mlp]
             else:
                 attn = ExLlamaV2Attention(self, layer_key, layer_idx, sliding_window = swa, rope_index = rope_index)
                 if cfg.arch.lm.is_moe: mlp = ExLlamaV2MoEMLP(self, layer_key, layer_idx)
@@ -161,13 +167,14 @@ class ExLlamaV2:
             else:
                 self.modules_dict[module.key] = module
 
-        # Find last layer that affects k/v cache
+        # Find last layer that affects k/v cache or recurrent state
 
         layer_idx = len(self.modules)
         while True:
             layer_idx -= 1
             if isinstance(self.modules[layer_idx], ExLlamaV2Attention) or \
-               isinstance(self.modules[layer_idx], ExLlamaV2ParallelDecoder):
+               isinstance(self.modules[layer_idx], ExLlamaV2ParallelDecoder) or \
+               isinstance(self.modules[layer_idx], ExLlamaV2GatedDeltaNet):
                 break
 
         self.last_kv_layer_idx = layer_idx
