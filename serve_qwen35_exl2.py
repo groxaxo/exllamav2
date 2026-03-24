@@ -255,7 +255,8 @@ def load_model_sync():
     print("  Context:", f"{MAX_SEQ_LEN:,} tokens")
     print("="*60 + "\n")
 
-    cfg   = ExLlamaV2Config(MODEL_DIR)
+    cfg             = ExLlamaV2Config(MODEL_DIR)
+    cfg.max_seq_len = MAX_SEQ_LEN          # honour --max-seq-len flag
     cfg.prepare()
     model = ExLlamaV2(cfg)
 
